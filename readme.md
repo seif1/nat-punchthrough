@@ -1,5 +1,5 @@
 A very simple implementation of NAT punchthrough using UDP sockets.
 
-The server can only operate for two connections, this was to simplify the programming process
+This is not intended to be used long term, this can panic from invalid input very easily
 
-This has been tested and was functional on clients behind separate NATs
+This version has also not been tested over separate NATS.
