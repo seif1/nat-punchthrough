@@ -1,40 +1,100 @@
 use std::net::{self, SocketAddr};
+use std::collections::HashMap;
+use rand::Rng;
+use std::time;
 
 fn main() {
 
     println!("\nAttempting to start server\n");
 
     let socket = net::UdpSocket::bind("0.0.0.0:8080").expect("Unable to bind");
+    let _ = socket.set_nonblocking(true);
+
     println!("{socket:?}");
-    let mut client1: Option<SocketAddr> = None;
-    let mut client2: Option<SocketAddr> = None;
 
-    let mut msg_buff: Vec<u8> = vec![0; 32];
+    let mut rng = rand::thread_rng();
+
+    /*loop {
+        let test: u16 = rng.gen();
+        let hex = &format!("{:#x}", test)[2..];
+
+        let parsed: u16 = u16::from_str_radix(&hex, 16).unwrap();
+        println!("{}, {}, {}", test, hex, parsed);
+    }*/
+
+
+    let mut connection_map: HashMap<u32, (SocketAddr, time::Instant)> = Default::default();
+    let mut ip_dict: HashMap<SocketAddr, u32> = Default::default();
+
+
+    let mut msg_buff: Vec<u8> = vec![0; 128];
+
     loop {
-        if let Ok(message) = socket.recv_from(&mut msg_buff) {
-            let ip = message.1;
+        // Manage response from any connection
+        if let Ok((_, addr)) = socket.recv_from(&mut msg_buff) {
+            let message: Vec<&str> = std::str::from_utf8(&msg_buff).expect("Invalid Input").trim().trim_end_matches('\0').split(" ").collect();
+            match message[0] {
+                "START_CONNECTION" => {
+                    let id: u32 = rng.gen();
 
-            if client1.is_none() {
-                client1 = Some(ip);
-            } else if client2.is_none() {
-                if let Some(client1_addr) = client1 {
-                    if ip != client1_addr {
-                        client2 = Some(ip);
+                    if let Ok(_) = socket.send_to(format!("ID {:#X}", id).as_bytes(), addr) {
+                        println!("Connection from: {} : {:#X}", addr, id);
+                        connection_map.insert(id, (addr, time::Instant::now().checked_add(time::Duration::from_secs(3)).expect("Failed to add duration")));
+                        ip_dict.insert(addr, id);
+                    }
+                },
+                "PONG" => {
+                    if let Some(connection_id) = ip_dict.get(&addr) {
+                        let entry = connection_map.entry(*connection_id);
+
+                        entry.and_modify(|(_addr, instant)| {
+                            *instant = time::Instant::now().checked_add(time::Duration::from_secs(3)).expect("Failed to add duration");
+                        });
+                    } else {
+                        let _ = socket.send_to(b"ERROR:_IP_NOT_RECOGNIZED", addr);
+                    }
+                },
+                "CONNECT" => {
+                    println!("Attempted Connection");
+                    if let Ok(id) = u32::from_str_radix(&message[1][2..], 16) {
+                        let mut connection_success = false;
+
+                        if let Some((remote_addr, _)) = connection_map.get(&id) {
+                            let _ = socket.send_to(format!("CONNECT {}", remote_addr).as_bytes(), addr);
+                            let _ = socket.send_to(format!("CONNECT {}", addr).as_bytes(), remote_addr);
+                            connection_success = true;
+                        } else {
+                            let _ = socket.send_to(b"UNKNOWN_ID", addr);
+                        }
+
+                        if connection_success {
+                            connection_map.remove(&ip_dict.remove(&addr).unwrap());
+                            ip_dict.remove(&connection_map.remove(&id).unwrap().0);
+                        }
+
+                    } else {
+                        let _ = socket.send_to(b"INVALID_ID", addr);
                     }
                 }
-            }
-
-            if client1.is_some() && client2.is_some() {
-                println!("Sending: {}, to {}", client1.unwrap(), client2.unwrap());
-                println!("Sending: {}, to {}", client2.unwrap(), client1.unwrap());
-
-                let _ = socket.send_to(client2.unwrap().to_string().as_bytes(), client1.unwrap()).unwrap();
-                let _ = socket.send_to(client1.unwrap().to_string().as_bytes(), client2.unwrap()).unwrap();
-                break;
-            } else {
-                println!("Message from peer: \"{}\" without anything to send.", message.1);
+                _ => {
+                    println!("Unknown message: {}", std::str::from_utf8(&msg_buff).expect("Invalid Input"));
+                }
             }
         }
-    }
 
+        // Manage Timeout values and PING active connections
+        {
+            connection_map.retain(|id, (addr, instant)| {
+                if instant.elapsed() > time::Duration::ZERO {
+                    println!("Removing: {} : {:#X}", addr, id);
+                    let _ = ip_dict.remove(addr);
+                    return false;
+                } else {
+                    let _ = socket.send_to(b"PING", *addr);
+                    return true;
+                }
+            });
+        }
+        msg_buff.fill(0);
+    }
 }
