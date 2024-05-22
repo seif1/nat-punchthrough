@@ -14,15 +14,6 @@ fn main() {
 
     let mut rng = rand::thread_rng();
 
-    /*loop {
-        let test: u16 = rng.gen();
-        let hex = &format!("{:#x}", test)[2..];
-
-        let parsed: u16 = u16::from_str_radix(&hex, 16).unwrap();
-        println!("{}, {}, {}", test, hex, parsed);
-    }*/
-
-
     let mut connection_map: HashMap<u32, (SocketAddr, time::Instant)> = Default::default();
     let mut ip_dict: HashMap<SocketAddr, u32> = Default::default();
 
@@ -30,10 +21,11 @@ fn main() {
     let mut msg_buff: Vec<u8> = vec![0; 128];
 
     loop {
-        // Manage response from any connection
         if let Ok((_, addr)) = socket.recv_from(&mut msg_buff) {
             let message: Vec<&str> = std::str::from_utf8(&msg_buff).expect("Invalid Input").trim().trim_end_matches('\0').split(" ").collect();
+            // Manage the possible message states
             match message[0] {
+                // When a new peer connects to the server
                 "START_CONNECTION" => {
                     let id: u32 = rng.gen();
 
@@ -43,6 +35,8 @@ fn main() {
                         ip_dict.insert(addr, id);
                     }
                 },
+
+                // Ensure connections are still active and waiting for a peer, and are not just sitting wasting resources
                 "PONG" => {
                     if let Some(connection_id) = ip_dict.get(&addr) {
                         let entry = connection_map.entry(*connection_id);
@@ -54,6 +48,8 @@ fn main() {
                         let _ = socket.send_to(b"ERROR:_IP_NOT_RECOGNIZED", addr);
                     }
                 },
+
+                // When a peer attempts to connect to another
                 "CONNECT" => {
                     println!("Attempted Connection");
                     if let Ok(id) = u32::from_str_radix(&message[1][2..], 16) {
